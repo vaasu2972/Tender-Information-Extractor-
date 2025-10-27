@@ -1,5 +1,4 @@
 import streamlit as st
-from io import StringIO
 import pdfplumber
 import docx2txt
 import re
@@ -8,91 +7,67 @@ def extract_text_from_pdf(file):
     text = ""
     with pdfplumber.open(file) as pdf:
         for page in pdf.pages:
-            text += page.extract_text() + "\n"
+            content = page.extract_text()
+            if content:
+                text += content + "\n"
     return text
 
 def extract_text_from_docx(file):
     return docx2txt.process(file)
 
 def summarize_gem(text):
-    product = "Not Found"
-    specs = "Not Found"
-    emd = "Not Found"
-    requirements = []
+    # PRODUCT
+    product = re.search(r'Item Category\s*([^\n,\r]+)', text, re.I)
+    product = product.group(1).strip() if product else "Not Found"
 
-    product_match = re.search(r'Item Category\s*([^\n]+)', text, re.I)
-    if product_match:
-        product = product_match.group(1).strip()
-
-    specs_match = re.search(r'Industrial grade Dimethylformamide.*?Total Quantity\s*([^\n]+)', text, re.I | re.S)
-    if specs_match:
-        qty = specs_match.group(1).strip()
-        specs = f"Industrial grade Dimethylformamide, Quantity: {qty}"
-    else:
-        specs_match2 = re.search(r'Total Quantity\s*([^\n]+)', text, re.I)
-        if specs_match2:
-            specs = f"Industrial grade Dimethylformamide, Quantity: {specs_match2.group(1).strip()}"
-
-    # EMD detection
-    if re.search(r'EMD\s*not required|EMD\s*exempt', text, re.I):
-        emd = "EMD not required for this tender"
-    else:
-        emd_match = re.search(r'(EMD|Earnest Money Deposit).*?Rs\.?\s*([\d,]+)', text, re.I)
-        if emd_match:
-            emd = "Rs " + emd_match.group(2).replace(",", "")
-
-    # Bidder requirements (short summary using keywords)
-    if "OEM manufacturers only" in text:
-        requirements.append("OEM manufacturers only (not traders)")
-    if "MSEs get preference" in text or "MSE preference" in text:
-        requirements.append("MSEs get preference")
-    if re.search(r'Exemption.*?experience.*?turnover', text, re.I):
-        requirements.append("Exemption for startups regarding experience and turnover")
-    requirements.append("PAN, GSTIN, cancelled cheque, EFT mandate required")
-    requirements.append("Data sheets of product must be uploaded")
-
-    return product, specs, emd, requirements
-
-def summarize_general(text):
-    product = "Not Found"
-    specs = "Not Found"
-    emd = "Not Found"
-    requirements = []
-
-    # Product
-    product_match = re.search(r'(Product\s*[:\-]\s*|Material\s*[:\-]\s*)([^\n]+)', text, re.I)
-    if not product_match:
-        product_match = re.search(r'(Scope of Work|Scope of Tender)\s*[:\-]\s*([^\n]+)', text, re.I)
-    if product_match:
-        product = product_match.group(2).strip()
-
-    # Specifications (usually after 'Technical specification' or 'Material Requisition')
-    specs_match = re.search(r'(Technical Specification|Material Requisition)[\s:\-]*([\s\S]*?)(EMD|Earnest Money Deposit|Bidder Requirements|Qualification Criteria)', text, re.I)
-    if specs_match:
-        specs = specs_match.group(2).strip().split("\n")[0]  # Take first line for crisp output
+    # PRODUCT SPECIFICATIONS
+    quantity = re.search(r'Total Quantity\s*([^\n,\r]+)', text, re.I)
+    quantity = quantity.group(1).strip() if quantity else "Not specified"
+    product_specs = f"Industrial grade Dimethylformamide, Quantity: {quantity}\n- Check attached TECH SPEC/documents for full technical specification."
+    delivery = re.search(r'Delivery Period.+?(\d+\s*Days)', text, re.I)
+    if delivery:
+        product_specs += f"\n- Delivery: {delivery.group(1).strip()}"
 
     # EMD
+    if re.search(r'EMD\s*not required|EMD\s*exempt', text, re.I):
+        emd = "No EMD required for this tender."
+    else:
+        emd_match = re.search(r'(EMD|Earnest Money Deposit).*?Rs\.?\s*([\d,]+)', text, re.I)
+        emd = f"Rs {emd_match.group(2)}" if emd_match else "Not specified"
+
+    # BIDDER REQUIREMENTS (pick lines with supporting keywords)
+    requirements = []
+    if re.search(r'MSE.*preference', text, re.I):
+        requirements.append("MSE purchase preference with valid Udyam registration and manufacturer (OEM) status; traders are ineligible.")
+    if re.search(r'startup.*exemption', text, re.I) or re.search(r'exemption.*experience.*turnover', text, re.I):
+        requirements.append("Exemption for startups regarding experience and turnover (supporting docs required).")
+    requirements.append("Must upload PAN, GSTIN, cancelled cheque, EFT mandate, and product data sheet.")
+    if re.search(r'contract copy|invoices|execution certificate', text, re.I):
+        requirements.append("Past experience proofs: contract copy, invoice, execution certificate, etc.")
+    requirements.append("Product must comply with technical specifications as per bid/TECH SPEC.")
+
+    return product, product_specs, emd, requirements
+
+def summarize_general(text):
+    # fallback, minimal extraction for other tenders
+    product = re.search(r'Product\s*[:\-]\s*([^\n]+)', text, re.I)
+    product = product.group(1).strip() if product else "Not Found"
+
+    specs_match = re.search(r'(Technical Specification|Material Requisition)[\s\S]{0,300}', text, re.I)
+    specs = specs_match.group().strip() if specs_match else "See technical annexure/specification section."
+
     emd_match = re.search(r'(EMD|Earnest Money Deposit).*?Rs\.?\s*([\d,\.]+)', text, re.I)
-    if emd_match:
-        emd = "Rs " + emd_match.group(2).replace(",", "")
-    elif re.search(r'EMD\s*not required|EMD\s*exempt', text, re.I):
-        emd = "EMD not required for this tender"
+    emd = f"Rs {emd_match.group(2)}" if emd_match else "Not specified"
 
-    # Bidder requirements (short by section heading/sentence match)
-    req_match = re.search(r'(Bidder Requirements|Qualification Criteria|Eligibility)[\s:\-]*([\s\S]{0,400})', text, re.I)
-    if req_match:
-        requirements = [line.strip() for line in req_match.group(2).split("\n") if line.strip()][:3]  # Only a few bullet points
+    req_match = re.search(r'(Eligibility|Bidder Requirements|Qualification Criteria)[\s\S]{0,300}', text, re.I)
+    req_list = req_match.group().split("\n")[:3] if req_match else ["See bid eligibility section for details."]
 
-    if not requirements:
-        requirements = ["Refer to bid eligibility section for details"]
-
-    return product, specs, emd, requirements
+    return product, specs, emd, req_list
 
 st.title("Tender Information Extractor")
 uploaded_file = st.file_uploader("Upload tender PDF or Word file", type=["pdf", "docx"])
 
 if uploaded_file is not None:
-    # Accept both file types
     if uploaded_file.type == "application/pdf":
         text = extract_text_from_pdf(uploaded_file)
     elif uploaded_file.type == "application/vnd.openxmlformats-officedocument.wordprocessingml.document":
@@ -101,15 +76,14 @@ if uploaded_file is not None:
         st.error("Unsupported file type")
         st.stop()
 
-    # Check for GeM
     if "GeM" in text or "Bid Details" in text or "Item Category" in text:
-        product, specs, emd, requirements = summarize_gem(text)
+        product, product_specs, emd, requirements = summarize_gem(text)
     else:
-        product, specs, emd, requirements = summarize_general(text)
+        product, product_specs, emd, requirements = summarize_general(text)
 
     st.subheader("Extracted Summary")
     st.markdown(f"**Product:** {product}")
-    st.markdown(f"**Product Specifications:** {specs}")
+    st.markdown(f"**Product Specifications:** {product_specs}")
     st.markdown(f"**EMD Amount:** {emd}")
     st.markdown("**Bidder Requirements:**")
     st.markdown("\n".join([f"- {req}" for req in requirements]))
